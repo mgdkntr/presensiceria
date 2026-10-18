@@ -152,6 +152,12 @@ table.tbl{border-collapse:collapse;width:100%;min-width:640px}
 @keyframes sp{to{transform:rotate(360deg)}}
 
 /* ---------- Login ---------- */
+.pwwrap{position:relative}
+.pwwrap input{padding-right:46px}
+.eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:38px;height:38px;border:0;background:transparent;border-radius:10px;color:var(--ink2);display:grid;place-items:center}
+.eye:hover{background:var(--sky)}
+.eye.on{color:var(--sky-dd)}
+
 #login{min-height:100vh;display:grid;place-items:center;padding:18px;background:linear-gradient(135deg,var(--sky),var(--mint) 60%,var(--sun))}
 .lgbox{background:#fff;border-radius:30px;padding:30px;max-width:400px;width:100%;box-shadow:0 20px 50px rgba(36,66,90,.2);text-align:center}
 .lgbox .big{font-size:56px}
@@ -199,7 +205,7 @@ table.tbl{border-collapse:collapse;width:100%;min-width:640px}
     <b style="color:var(--sky-dd)">Kelas 5 B</b>
     <form id="lgForm" onsubmit="doLogin(event)">
       <div class="fld"><label for="lgU">Nama pengguna</label><input id="lgU" type="text" autocomplete="username" required></div>
-      <div class="fld"><label for="lgP">Kata sandi</label><input id="lgP" type="password" autocomplete="current-password" required></div>
+      <div class="fld"><label for="lgP">Kata sandi</label><div class="pwwrap"><input id="lgP" type="password" autocomplete="current-password" required><button type="button" class="eye" id="lgEye" aria-label="Tampilkan kata sandi" aria-pressed="false" onclick="togglePw('lgP','lgEye')"><svg id="lgEyeSvg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
       <div id="lgErr" class="note hide" style="background:var(--pink)"></div>
       <button class="btn pri" type="submit" id="lgBtn" style="justify-content:center">Masuk</button>
     </form>
@@ -294,17 +300,31 @@ function toast(msg,type){
   setTimeout(function(){t.remove()},type==='err'?6500:3200);
 }
 function cleanErr(m){m=String(m||'Terjadi kesalahan.');while(/^(Exception|Error):\s*/.test(m))m=m.replace(/^(Exception|Error):\s*/,'');return m}
+/* URL aplikasi web Apps Script (backend). Frontend ini boleh di-hosting di GitHub Pages. */
+var API_URL='https://script.google.com/macros/s/AKfycbxx3qCSQAhGmjMHxqqtky4R7Tn7CBz1FNj6O3LFaxksWoQiRE-LGN-vmHnKiEZpGpi5/exec';
 function api(fn){
   var args=Array.prototype.slice.call(arguments,1);
-  var noTok=(fn==='api_login');
-  return new Promise(function(res,rej){
-    var r=google.script.run.withSuccessHandler(res).withFailureHandler(function(e){
-      var m=cleanErr(e&&e.message);
-      if(m.indexOf('SESI_HABIS')>=0){sesiHabis();rej(new Error('Sesi berakhir. Silakan masuk kembali.'));return}
-      rej(new Error(m));
+  var full=(fn==='api_login')?args:[TOKEN].concat(args);
+  var fail=function(m){
+    m=cleanErr(m);
+    if(m.indexOf('SESI_HABIS')>=0){sesiHabis();return new Error('Sesi berakhir. Silakan masuk kembali.')}
+    return new Error(m);
+  };
+  // Mode 1: dibuka langsung dari Apps Script (google.script.run tersedia)
+  if(window.google&&google.script&&google.script.run){
+    return new Promise(function(res,rej){
+      var r=google.script.run.withSuccessHandler(res).withFailureHandler(function(e){rej(fail(e&&e.message))});
+      r[fn].apply(r,full);
     });
-    r[fn].apply(r,noTok?args:[TOKEN].concat(args));
-  });
+  }
+  // Mode 2: di-hosting di GitHub/hosting lain -> panggil Web App lewat fetch
+  return fetch(API_URL,{method:'POST',redirect:'follow',body:JSON.stringify({fn:fn,args:full})})
+    .then(function(r){return r.text()})
+    .then(function(t){
+      var j;try{j=JSON.parse(t)}catch(e){throw fail('Server tidak membalas dengan benar. Pastikan deployment Apps Script diatur "Siapa saja" dan sudah memakai versi terbaru.')}
+      if(!j.ok)throw fail(j.error);
+      return j.data;
+    },function(){throw fail('Tidak dapat terhubung ke server. Periksa koneksi internet dan URL Web App.')});
 }
 async function act(fn,args,opt){
   opt=opt||{};
@@ -338,6 +358,16 @@ function confirmBox(msg,okText,cls){
 }
 
 /* ---------------- login ---------------- */
+function togglePw(inId,btnId){
+  var i=document.getElementById(inId),b=document.getElementById(btnId),show=i.type==='password';
+  i.type=show?'text':'password';
+  b.classList.toggle('on',show);b.setAttribute('aria-pressed',show?'true':'false');
+  b.setAttribute('aria-label',show?'Sembunyikan kata sandi':'Tampilkan kata sandi');
+  b.innerHTML=show
+   ?'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 19c-7 0-11-7-11-7a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+   :'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+}
+
 async function doLogin(ev){
   ev.preventDefault();
   var er=$('#lgErr');er.classList.add('hide');
@@ -345,7 +375,7 @@ async function doLogin(ev){
   try{
     var r=await api('api_login',val('lgU'),val('lgP'));
     TOKEN=r.token;try{localStorage.setItem('pc_tok',TOKEN)}catch(e){}
-    $('#lgP').value='';
+    $('#lgP').value='';if($('#lgP').type==='text')togglePw('lgP','lgEye');
     await bootApp();
   }catch(e){er.textContent=e.message;er.classList.remove('hide')}
   finally{$('#lgBtn').disabled=false}

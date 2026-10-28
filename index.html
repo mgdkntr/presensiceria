@@ -117,6 +117,9 @@ table.tbl{border-collapse:collapse;width:100%;min-width:640px}
 .seg button.on.Alpa{background:var(--pink-d);border-color:var(--pink-d);color:#fff}
 .seg.lock button{opacity:.7;cursor:default}
 
+.ninp{width:88px;text-align:center;padding:6px;min-height:38px}
+.ninp.bad{border-color:var(--pink-d);background:#fff0f3}
+
 /* ---------- Kalender ---------- */
 .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
 .cal .dh{text-align:center;font-weight:800;color:var(--ink2);font-size:13px;padding:4px}
@@ -237,6 +240,7 @@ table.tbl{border-collapse:collapse;width:100%;min-width:640px}
     <section class="page hide" id="pg-kalender"></section>
     <section class="page hide" id="pg-bulanan"></section>
     <section class="page hide" id="pg-semester"></section>
+    <section class="page hide" id="pg-nilai"></section>
     <section class="page hide" id="pg-laporan"></section>
     <section class="page hide" id="pg-pengaturan"></section>
   </main>
@@ -256,7 +260,7 @@ var TOKEN = null;
 var S = null;                 // state data
 var UI = {page:'dashboard', pDate:null, draft:{}, locked:false, dirty:false,
           siswaQ:'', siswaSort:'nama', calY:0, calM:0, calSel:null,
-          rbY:0, rbM:0, rbQ:'', rsSem:'1', rsCustom:false, rsA:'', rsB:'', rsQ:'', lap:{}};
+          nTab:'input', nSem:'', nMapel:'', nSiswa:'', nDraft:{}, penEdit:[], penMid:'', rbY:0, rbM:0, rbQ:'', rsSem:'1', rsCustom:false, rsA:'', rsB:'', rsQ:'', lap:{}};
 var charts = {};
 var BULAN = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 var HARI = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
@@ -264,7 +268,7 @@ var STATUS = ['Hadir','Terlambat','Sakit','Izin','Alpa'];
 var STATUS_EMO = {Hadir:'✅',Terlambat:'⏰',Sakit:'🤒',Izin:'📝',Alpa:'❌'};
 var MENU = [
   ['dashboard','🏠','Dashboard'],['siswa','🧒','Data Siswa'],['presensi','✅','Presensi Harian'],
-  ['kalender','📅','Kalender Presensi'],['bulanan','📊','Rekap Bulanan'],['semester','📈','Rekap Semester'],
+  ['kalender','📅','Kalender Presensi'],['bulanan','📊','Rekap Bulanan'],['semester','📈','Rekap Semester'],['nilai','🏅','Daftar Nilai'],
   ['laporan','🖨️','Laporan dan Ekspor'],['pengaturan','⚙️','Pengaturan']
 ];
 
@@ -397,6 +401,9 @@ function applyBoot(d){
   S.pres={};d.presensi.forEach(function(p){S.pres[p[0]+'|'+p[1]]={status:p[2],catatan:p[3]}});
   S.kal={};d.kalender.forEach(function(k){S.kal[k.tanggal]=k});
   S.ef={};d.efektif.forEach(function(e){S.ef[e.bulan]=+e.jumlah});
+  S.mapel=(d.mapel||[]).map(function(m){return {id:m.id,nama:m.nama,kkm:Number(m.kkm),urutan:Number(m.urutan)}});
+  S.pen=(d.penilaian||[]).map(function(p){return {id:p.id,mapelId:p.mapelId,semester:p.semester,nama:p.nama,bobot:Number(p.bobot),urutan:Number(p.urutan)}});
+  S.nilai={};(d.nilai||[]).forEach(function(n){S.nilai[n[0]+'|'+n[1]]=Number(n[2])});
   S.users=d.users||[];S.dbUrl=d.dbUrl||'';
 }
 async function bootApp(){
@@ -433,9 +440,9 @@ $('#modalRoot').addEventListener('mousedown',function(e){if(e.target===this&&!$(
 window.addEventListener('beforeunload',function(e){if(UI.dirty){e.preventDefault();e.returnValue='';return ''}});
 
 async function go(p,force){
-  if(!force&&UI.dirty&&UI.page==='presensi'&&p!=='presensi'){
-    var ok=await confirmBox('Ada perubahan presensi yang belum disimpan. Tinggalkan halaman ini tanpa menyimpan?','Tinggalkan','bad');
-    if(!ok)return;UI.dirty=false;
+  if(!force&&UI.dirty&&(UI.page==='presensi'||UI.page==='nilai')&&p!==UI.page){
+    var ok=await confirmBox('Ada perubahan '+(UI.page==='nilai'?'nilai':'presensi')+' yang belum disimpan. Tinggalkan halaman ini tanpa menyimpan?','Tinggalkan','bad');
+    if(!ok)return;UI.dirty=false;UI.nDraft={};
   }
   UI.page=p;$('#side').classList.remove('open');
   $$('.page').forEach(function(e){e.classList.add('hide')});
@@ -444,7 +451,7 @@ async function go(p,force){
   $('#btnHome').classList.toggle('hide',p==='dashboard');
   window.scrollTo(0,0);
   ({dashboard:renderDashboard,siswa:renderSiswa,presensi:renderPresensi,kalender:renderKalender,
-    bulanan:renderBulanan,semester:renderSemester,laporan:renderLaporan,pengaturan:renderPengaturan})[p]();
+    bulanan:renderBulanan,semester:renderSemester,nilai:renderNilai,laporan:renderLaporan,pengaturan:renderPengaturan})[p]();
 }
 
 /* =====================================================================
@@ -638,6 +645,7 @@ async function hapusSiswa(id){
     await act('api_deleteSiswa',[id]);
     S.siswa=S.siswa.filter(function(x){return x.id!==id});
     Object.keys(S.pres).forEach(function(k){if(k.indexOf(id+'|')===0)delete S.pres[k]});
+    Object.keys(S.nilai).forEach(function(k){if(k.indexOf(id+'|')===0)delete S.nilai[k]});
     toast('Siswa dihapus.');renderSiswa();
   }catch(e){}
 }
@@ -946,11 +954,11 @@ function rsRefresh(){
 /* =====================================================================
    LAPORAN & EKSPOR
    ===================================================================== */
-var JENIS_LAP=[['harian','Rekap harian'],['bulanan','Rekap bulanan'],['semester','Rekap semester'],['individu','Rekap individu per siswa'],['kelas','Rekap seluruh kelas (rentang tanggal)'],['terlambat','Daftar siswa yang sering terlambat'],['alpa','Daftar siswa dengan jumlah alpa tertentu']];
+var JENIS_LAP=[['harian','Rekap harian'],['bulanan','Rekap bulanan'],['semester','Rekap semester'],['individu','Rekap individu per siswa'],['kelas','Rekap seluruh kelas (rentang tanggal)'],['terlambat','Daftar siswa yang sering terlambat'],['alpa','Daftar siswa dengan jumlah alpa tertentu'],['nilai','Daftar nilai per mata pelajaran'],['rapor','Rekap nilai individu (semua mata pelajaran)']];
 function renderLaporan(){
   var L=UI.lap;
   if(!L.jenis){L.jenis='bulanan';L.tgl=today();L.y=new Date().getFullYear();L.m=new Date().getMonth()+1;L.sem=S.set.semesterAktif==='2'?'2':'1';
-    var r=semRange(L.sem);L.a=r[0];L.b=r[1];L.min=3;L.siswa='';L.resmi=true;L.ttd=true}
+    var r=semRange(L.sem);L.a=r[0];L.b=r[1];L.min=3;L.siswa='';L.resmi=true;L.ttd=true;L.nsem=S.set.semesterAktif==='2'?'2':'1';L.mapel=S.mapel.length?mapelList()[0].id:''}
   var h='<div class="ph"><h2>🖨️ Laporan dan Ekspor</h2></div><div class="card"><div class="row">'+
     '<div class="fld" style="min-width:240px"><label for="lJ">Jenis laporan</label><select id="lJ" onchange="UI.lap.jenis=this.value;renderLaporan()">'+JENIS_LAP.map(function(o){return '<option value="'+o[0]+'"'+(L.jenis===o[0]?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>'+lapParams()+'</div>'+
     '<div class="row" style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center;font-weight:800"><input type="checkbox" id="lResmi" style="width:auto" '+(L.resmi?'checked':'')+' onchange="UI.lap.resmi=this.checked;lapPreview()"> Laporan resmi (kop &amp; identitas)</label>'+
@@ -974,6 +982,11 @@ function lapParams(){
     h+=fld('Dari tanggal','lA','<input type="date" id="lA" value="'+L.a+'" onchange="UI.lap.a=this.value;lapPreview()">')+fld('Sampai tanggal','lB','<input type="date" id="lB" value="'+L.b+'" onchange="UI.lap.b=this.value;lapPreview()">');
   }
   if(j==='individu')h+=fld('Siswa','lSw','<select id="lSw" onchange="UI.lap.siswa=this.value;lapPreview()"><option value="">– pilih siswa –</option>'+aktifSiswa().map(function(s){return '<option value="'+s.id+'"'+(L.siswa===s.id?' selected':'')+'>'+esc(s.nama)+'</option>'}).join('')+'</select>');
+  if(j==='nilai'||j==='rapor'){
+    h+=fld('Semester','lNs','<select id="lNs" onchange="UI.lap.nsem=this.value;lapPreview()"><option value="1"'+(L.nsem==='1'?' selected':'')+'>Semester 1</option><option value="2"'+(L.nsem==='2'?' selected':'')+'>Semester 2</option></select>');
+    if(j==='nilai')h+=fld('Mata pelajaran','lMp','<select id="lMp" onchange="UI.lap.mapel=this.value;lapPreview()">'+mapelList().map(function(m){return '<option value="'+m.id+'"'+(L.mapel===m.id?' selected':'')+'>'+esc(m.nama)+'</option>'}).join('')+'</select>');
+    else h+=fld('Siswa','lSw','<select id="lSw" onchange="UI.lap.siswa=this.value;lapPreview()"><option value="">– pilih siswa –</option>'+aktifSiswa().map(function(s){return '<option value="'+s.id+'"'+(L.siswa===s.id?' selected':'')+'>'+esc(s.nama)+'</option>'}).join('')+'</select>');
+  }
   if(j==='terlambat'||j==='alpa')h+=fld(j==='alpa'?'Minimal jumlah alpa':'Minimal jumlah terlambat','lMin','<input type="number" min="1" id="lMin" value="'+L.min+'" oninput="UI.lap.min=Math.max(1,+this.value||1);lapPreview()">');
   return h;
 }
@@ -1002,6 +1015,38 @@ function buildReport(){
   }
   if(j==='bulanan'){var mr=monthRange(L.y,L.m);return repRekap('Rekap Presensi Bulanan','Bulan '+BULAN[L.m-1]+' '+L.y,mr[0],mr[1],true,list,semLabel(mr[0],mr[1]))}
   if(j==='semester'){var r=semRange(L.sem);return repRekap('Rekap Presensi Semester '+L.sem,fmtTglPanjang(r[0])+' – '+fmtTglPanjang(r[1]),r[0],r[1],true,list,L.sem)}
+  if(j==='nilai'||j==='rapor'){
+    var ns=L.nsem||S.set.semesterAktif,sem=ns==='2'?'2':'1',per2='Semester '+sem+' · TA '+S.set.tahunAjaran;
+    if(!S.mapel.length)return {error:'Belum ada mata pelajaran. Tambahkan di menu Daftar Nilai.'};
+    if(j==='nilai'){
+      var m=S.mapel.filter(function(x){return x.id===L.mapel})[0]||mapelList()[0],pens=penList(m.id,sem);
+      if(!pens.length)return {error:'Mata pelajaran '+m.nama+' belum punya penilaian pada semester '+sem+'.'};
+      var vals=[],tun=0,lg=0;
+      var rowsN=list.map(function(s,i){
+        var r=hitungAkhir(s.id,pens,nilaiSaved);if(r.akhir!=null){vals.push(r.akhir);if(r.akhir>=m.kkm)tun++}if(r.lengkap)lg++;
+        return [i+1,s.nisn,s.nis,s.nama+(s.demo?' (contoh)':'')].concat(pens.map(function(p){return nilaiSaved(s.id,p.id)==null?'':nilaiSaved(s.id,p.id)})).concat([r.akhir==null?'':r.akhir,r.akhir==null?'Belum ada nilai':(r.akhir>=m.kkm?'Tuntas':'Belum tuntas')+(r.lengkap?'':' (sementara)')]);
+      });
+      var tbN=totalBobot(pens);
+      return {judul:'Daftar Nilai – '+m.nama,periode:per2,semester:sem,
+        headers:['No','NISN','NIS','Nama Siswa'].concat(pens.map(function(p){return p.nama+' ('+bobotTxt(p.bobot)+'%)'})).concat(['Nilai Akhir','Keterangan']),
+        types:['int','text','text','left'].concat(pens.map(function(){return 'dec'})).concat(['dec','text']),rows:rowsN,
+        summary:[['Mata pelajaran',m.nama],['KKM',nTxt(m.kkm)],['Total bobot penilaian',bobotTxt(tbN)+'%'],['Rata-rata kelas',vals.length?num(vals.reduce(function(a,b){return a+b},0)/vals.length,1):'–'],['Nilai tertinggi',vals.length?num(Math.max.apply(null,vals),1):'–'],['Nilai terendah',vals.length?num(Math.min.apply(null,vals),1):'–'],['Siswa tuntas',tun],['Siswa belum tuntas',vals.length-tun],['Siswa dengan penilaian lengkap',lg+' dari '+list.length]],
+        rumus:'Nilai akhir = Σ(nilai × bobot) ÷ Σ bobot penilaian yang terisi.',catatan:Math.abs(tbN-100)<0.005?'':'Total bobot penilaian '+bobotTxt(tbN)+'% (bukan 100%).'};
+    }
+    var sw=S.siswa.filter(function(x){return x.id===L.siswa})[0];
+    if(!sw)return {error:'Pilih siswa terlebih dahulu.'};
+    var tot2=[],tun2=0,rowsR=[];
+    mapelList().forEach(function(m2){
+      var pn=penList(m2.id,sem);if(!pn.length)return;
+      var r=hitungAkhir(sw.id,pn,nilaiSaved);if(r.akhir!=null){tot2.push(r.akhir);if(r.akhir>=m2.kkm)tun2++}
+      rowsR.push([rowsR.length+1,m2.nama,m2.kkm,r.akhir==null?'':r.akhir,r.akhir==null?'Belum ada nilai':(r.akhir>=m2.kkm?'Tuntas':'Belum tuntas')+(r.lengkap?'':' (sementara)')]);
+    });
+    if(!rowsR.length)return {error:'Belum ada penilaian pada semester '+sem+'.'};
+    return {judul:'Rekap Nilai Individu',periode:per2,semester:sem,ident:[['Nama siswa',sw.nama],['NISN',sw.nisn],['NIS',sw.nis||'-']],
+      headers:['No','Mata Pelajaran','KKM','Nilai Akhir','Keterangan'],types:['int','left','dec','dec','text'],rows:rowsR,
+      summary:[['Jumlah mata pelajaran',rowsR.length],['Rata-rata nilai akhir',tot2.length?num(tot2.reduce(function(a,b){return a+b},0)/tot2.length,1):'–'],['Mata pelajaran tuntas',tun2],['Mata pelajaran belum tuntas',tot2.length-tun2]],
+      rumus:'Nilai akhir = Σ(nilai × bobot) ÷ Σ bobot penilaian yang terisi.'};
+  }
   if(!L.a||!L.b||L.b<L.a)return {error:'Rentang tanggal tidak valid.'};
   var per=fmtTglPanjang(L.a)+' – '+fmtTglPanjang(L.b);
   if(j==='kelas')return repRekap('Rekap Presensi Seluruh Kelas',per,L.a,L.b,false,list,semLabel(L.a,L.b));
@@ -1035,6 +1080,7 @@ function buildReport(){
 function fmtCell(v,type){
   if(v===''||v==null)return '';
   if(type==='pct')return fmtPct(v);
+  if(type==='dec')return typeof v==='number'?num(v,1):String(v);
   return String(v);
 }
 /* HTML laporan: semua gaya inline agar tampil sama di pratinjau, cetak, dan PDF server. */
@@ -1096,7 +1142,7 @@ function repAoa(rep){
     for(var i=0;i<4;i++)merges.push({s:{r:i,c:0},e:{r:i,c:Math.max(n-1,1)}});
   }else{row([rep.judul+' – '+rep.periode]);row([])}
   var hr=aoa.length;row(rep.headers);
-  rep.rows.forEach(function(r){row(r.map(function(v,ci){var ty=rep.types[ci];if(v===''||v==null)return '';if(ty==='pct')return Math.round(v*100)/100;if(ty==='int'&&typeof v==='number')return v;return String(v)}))});
+  rep.rows.forEach(function(r){row(r.map(function(v,ci){var ty=rep.types[ci];if(v===''||v==null)return '';if((ty==='pct'||ty==='dec')&&typeof v==='number')return Math.round(v*100)/100;if(ty==='int'&&typeof v==='number')return v;return String(v)}))});
   row([]);row(['Ringkasan statistik']);
   rep.summary.forEach(function(r){row([r[0],r[1]])});
   if(rep.rumus){row([]);row([rep.rumus])}
@@ -1123,6 +1169,7 @@ function lapXlsx(){
   rep.rows.forEach(function(r,ri){r.forEach(function(v,ci){
     var ty=rep.types[ci],addr=XLSX.utils.encode_cell({r:o.hr+1+ri,c:ci}),cell=ws[addr];if(!cell)return;
     if(ty==='pct'&&typeof v==='number')cell.z='0.0"%"';
+    if(ty==='dec'&&typeof v==='number')cell.z='0.0';
     if(ty==='text'){cell.t='s';cell.v=String(v)}
   })});
   var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Laporan');
@@ -1132,7 +1179,7 @@ function lapXlsx(){
 function lapCsv(){
   var rep=curReport();if(!rep)return;
   var aoa=[rep.headers];
-  rep.rows.forEach(function(r){aoa.push(r.map(function(v,ci){return v===''||v==null?'':(rep.types[ci]==='pct'?num(v,1)+'%':v)}))});
+  rep.rows.forEach(function(r){aoa.push(r.map(function(v,ci){return v===''||v==null?'':(rep.types[ci]==='pct'?num(v,1)+'%':(rep.types[ci]==='dec'&&typeof v==='number'?num(v,1):v))}))});
   aoa.push([]);aoa.push(['Ringkasan statistik']);rep.summary.forEach(function(r){aoa.push([r[0],r[1]])});
   downloadCsv(aoa,repFileName(rep,'csv'),S.set.csvSep);toast('File CSV diunduh.');
 }
@@ -1178,6 +1225,244 @@ function downloadXlsx(sheets,name){
   triggerDownload(new Blob([XLSX.write(wb,{bookType:'xlsx',type:'array'})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name);
   toast('File diunduh.');
 }
+
+/* =====================================================================
+   DAFTAR NILAI (mata pelajaran, penilaian berbobot, nilai siswa)
+   ===================================================================== */
+function mapelList(){return S.mapel.slice().sort(function(a,b){return (a.urutan-b.urutan)||a.nama.localeCompare(b.nama,'id')})}
+function penList(mid,sem){return S.pen.filter(function(p){return p.mapelId===mid&&p.semester===sem}).sort(function(a,b){return a.urutan-b.urutan})}
+function nilaiSaved(sid,pid){var v=S.nilai[sid+'|'+pid];return v===undefined?null:v}
+function nilaiOf(sid,pid){
+  var k=sid+'|'+pid;
+  if(Object.prototype.hasOwnProperty.call(UI.nDraft,k)){var d=UI.nDraft[k];return (d===''||isNaN(Number(d)))?null:Number(d)}
+  return nilaiSaved(sid,pid);
+}
+/* Nilai akhir = Σ(nilai × bobot) ÷ Σ(bobot penilaian yang sudah terisi). Bila ada yang belum terisi, hasil bertanda * (sementara). */
+function hitungAkhir(sid,pens,get){
+  get=get||nilaiOf;var sb=0,sn=0,filled=0,tb=0;
+  pens.forEach(function(p){tb+=p.bobot;var v=get(sid,p.id);if(v!==null){sn+=v*p.bobot;sb+=p.bobot;filled++}});
+  return {akhir:sb>0?sn/sb:null,lengkap:pens.length>0&&filled===pens.length,filled:filled,tb:tb};
+}
+function nTxt(v){return v==null?'–':String(Math.round(v*100)/100).replace('.',',')}
+function nPill(v,kkm,lengkap){
+  if(v==null)return '<span class="pill p-na">–</span>';
+  return '<span class="pill '+(v>=kkm?'p-good':'p-bad')+'">'+num(v,1)+(lengkap?'':'*')+'</span>';
+}
+function totalBobot(pens){return pens.reduce(function(a,p){return a+p.bobot},0)}
+function bobotBadge(tb){
+  var ok=Math.abs(tb-100)<0.005;
+  return '<span class="badge '+(ok?'b-ok':'b-demo')+'">Total bobot '+bobotTxt(tb)+'%'+(ok?' ✔':' (idealnya 100%)')+'</span>';
+}
+function bobotTxt(b){return String(Math.round(b*100)/100).replace('.',',')}
+
+async function nGuard(){
+  if(UI.dirty&&UI.page==='nilai'){
+    if(!(await confirmBox('Ada nilai yang belum disimpan. Lanjutkan tanpa menyimpan?','Lanjutkan','bad')))return false;
+    UI.dirty=false;UI.nDraft={};
+  }
+  return true;
+}
+async function nSetSem(v){if(!(await nGuard())){renderNilai();return}UI.nSem=v;renderNilai()}
+async function nSetTab(t){if(!(await nGuard()))return;UI.nTab=t;renderNilai()}
+async function nSetMapel(v){if(!(await nGuard())){renderNilai();return}UI.nMapel=v;renderNilai()}
+async function nSetSiswa(v){UI.nSiswa=v;nBody()}
+
+function renderNilai(){
+  if(!UI.nSem)UI.nSem=S.set.semesterAktif==='2'?'2':'1';
+  var ml=mapelList();
+  if(!ml.some(function(m){return m.id===UI.nMapel}))UI.nMapel=ml.length?ml[0].id:'';
+  var tabs=[['input','✏️ Input nilai'],['siswa','🧒 Nilai per siswa'],['kelola','📚 Mata pelajaran & penilaian']];
+  var h='<div class="ph"><h2>🏅 Daftar Nilai</h2><span class="sp"></span><div class="fld" style="min-width:150px"><label for="nSem">Semester</label><select id="nSem" onchange="nSetSem(this.value)"><option value="1"'+(UI.nSem==='1'?' selected':'')+'>Semester 1</option><option value="2"'+(UI.nSem==='2'?' selected':'')+'>Semester 2</option></select></div></div>';
+  h+='<div class="row" style="margin-bottom:12px">'+tabs.map(function(t){return '<button class="btn '+(UI.nTab===t[0]?'pri':'ghost')+'" onclick="nSetTab(\''+t[0]+'\')">'+t[1]+'</button>'}).join('')+'</div><div id="nBody"></div>';
+  $('#pg-nilai').innerHTML=h;nBody();
+}
+function nBody(){({input:nInput,siswa:nSiswa,kelola:nKelola})[UI.nTab]()}
+function nEmptyMapel(){
+  return '<div class="card empty"><span class="em">📚</span>Belum ada mata pelajaran. Tambahkan dulu mata pelajaran, lalu atur penilaian dan bobotnya.<p><button class="btn ok" onclick="formMapel()">➕ Tambah mata pelajaran</button></p></div>';
+}
+
+/* ---- Input nilai per mata pelajaran ---- */
+function nInput(){
+  var el=$('#nBody');
+  if(!S.mapel.length){el.innerHTML=nEmptyMapel();return}
+  var m=S.mapel.filter(function(x){return x.id===UI.nMapel})[0],pens=penList(m.id,UI.nSem),list=aktifSiswa();
+  var h='<div class="card"><div class="row"><div class="fld" style="min-width:220px"><label for="nMapel">Mata pelajaran</label><select id="nMapel" onchange="nSetMapel(this.value)">'+mapelList().map(function(x){return '<option value="'+x.id+'"'+(x.id===m.id?' selected':'')+'>'+esc(x.nama)+'</option>'}).join('')+'</select></div>'+
+    '<span class="chip">KKM <b>'+nTxt(m.kkm)+'</b></span>'+(pens.length?bobotBadge(totalBobot(pens)):'')+'<span class="sp" style="flex:1"></span>'+
+    '<button class="btn warn" onclick="penModal(\''+m.id+'\')">⚖️ Atur penilaian &amp; bobot</button>'+
+    '<button class="btn pri" id="nSave" onclick="nSimpan()" '+(pens.length?'':'disabled')+'>💾 Simpan nilai</button></div>'+
+    '<p class="hint" style="margin-bottom:0">Nilai akhir = Σ(nilai × bobot) ÷ Σ bobot. Tanda * berarti ada penilaian yang belum diisi (nilai sementara). Kosongkan kotak untuk menghapus nilai.</p></div>';
+  if(!pens.length){h+='<div class="card empty" style="margin-top:12px"><span class="em">⚖️</span>Belum ada penilaian untuk '+esc(m.nama)+' semester '+UI.nSem+'.<p><button class="btn ok" onclick="penModal(\''+m.id+'\')">➕ Tambah penilaian</button></p></div>';el.innerHTML=h;return}
+  if(!list.length){h+='<div class="card empty" style="margin-top:12px"><span class="em">🧒</span>Belum ada siswa aktif.</div>';el.innerHTML=h;return}
+  h+='<div class="grid g4" id="nStat" style="margin-top:12px"></div><div class="tw" style="margin-top:12px"><table class="tbl" style="min-width:'+(420+pens.length*110)+'px"><thead><tr><th>No</th><th class="l">Siswa</th>'+
+    pens.map(function(p){return '<th>'+esc(p.nama)+'<br><small>'+bobotTxt(p.bobot)+'%</small></th>'}).join('')+'<th>Nilai akhir</th><th>Ket.</th></tr></thead><tbody>';
+  list.forEach(function(s,i){
+    var r=hitungAkhir(s.id,pens);
+    h+='<tr><td>'+(i+1)+'</td><td class="l"><b>'+esc(s.nama)+'</b>'+(s.demo?' <span class="badge b-demo">CONTOH</span>':'')+'<br><small class="hint">NISN '+esc(s.nisn)+'</small></td>';
+    pens.forEach(function(p){
+      var v=nilaiOf(s.id,p.id),k=s.id+'|'+p.id,dv=Object.prototype.hasOwnProperty.call(UI.nDraft,k)?UI.nDraft[k]:(v===null?'':v);
+      h+='<td><input class="ninp" type="number" inputmode="decimal" min="0" max="100" step="0.01" data-s="'+s.id+'" data-p="'+p.id+'" value="'+esc(dv)+'" oninput="nIn(this)" aria-label="'+esc(p.nama)+' '+esc(s.nama)+'"></td>';
+    });
+    h+='<td id="na_'+s.id+'">'+nPill(r.akhir,m.kkm,r.lengkap)+'</td><td id="nk_'+s.id+'">'+nKet(r.akhir,m.kkm)+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  el.innerHTML=h;nStats();
+}
+function nKet(v,kkm){return v==null?'<span class="hint">–</span>':'<span class="badge '+(v>=kkm?'b-ok':'b-no')+'">'+(v>=kkm?'Tuntas':'Belum tuntas')+'</span>'}
+function nIn(inp){
+  var sid=inp.getAttribute('data-s'),pid=inp.getAttribute('data-p'),v=inp.value.trim(),n=Number(v);
+  var bad=v!==''&&(isNaN(n)||n<0||n>100);
+  inp.classList.toggle('bad',bad);
+  UI.nDraft[sid+'|'+pid]=v;UI.dirty=true;
+  var m=S.mapel.filter(function(x){return x.id===UI.nMapel})[0],pens=penList(m.id,UI.nSem),r=hitungAkhir(sid,pens);
+  $('#na_'+sid).innerHTML=nPill(r.akhir,m.kkm,r.lengkap);$('#nk_'+sid).innerHTML=nKet(r.akhir,m.kkm);
+  nStats();
+}
+function nStats(){
+  var el=$('#nStat');if(!el)return;
+  var m=S.mapel.filter(function(x){return x.id===UI.nMapel})[0],pens=penList(m.id,UI.nSem),vals=[],tun=0,lengkap=0,list=aktifSiswa();
+  list.forEach(function(s){var r=hitungAkhir(s.id,pens);if(r.akhir!=null){vals.push(r.akhir);if(r.akhir>=m.kkm)tun++}if(r.lengkap)lengkap++});
+  var avg=vals.length?vals.reduce(function(a,b){return a+b},0)/vals.length:null;
+  var c=function(cls,em,n,l,s){return '<div class="stat '+cls+'"><span class="em">'+em+'</span><div class="n">'+n+'</div><div class="l">'+l+'</div><div class="s">'+s+'</div></div>'};
+  el.innerHTML=c('c-sky','📊',avg==null?'–':num(avg,1),'Rata-rata kelas','dari '+vals.length+' siswa bernilai')+c('c-mint','🥇',vals.length?num(Math.max.apply(null,vals),1):'–','Tertinggi','')+c('c-pink','📉',vals.length?num(Math.min.apply(null,vals),1):'–','Terendah','')+c('c-sun','✅',tun+' / '+list.length,'Tuntas (KKM '+nTxt(m.kkm)+')',lengkap+' siswa penilaian lengkap');
+}
+async function nSimpan(){
+  var items=[],bad=false;
+  Object.keys(UI.nDraft).forEach(function(k){
+    var v=UI.nDraft[k],p=k.split('|');
+    if(v!==''&&(isNaN(Number(v))||Number(v)<0||Number(v)>100))bad=true;
+    items.push({siswaId:p[0],penilaianId:p[1],nilai:v});
+  });
+  if(bad){toast('Ada nilai di luar rentang 0–100. Perbaiki kotak yang bertanda merah.','err');return}
+  if(!items.length){toast('Tidak ada perubahan nilai.','inf');return}
+  try{
+    var r=await act('api_saveNilai',[items],{txt:'Menyimpan nilai…'});
+    items.forEach(function(it){var k=it.siswaId+'|'+it.penilaianId;if(it.nilai==='')delete S.nilai[k];else S.nilai[k]=Math.round(Number(it.nilai)*100)/100});
+    UI.nDraft={};UI.dirty=false;toast('Nilai tersimpan ('+r.simpan+' diperbarui, '+r.dihapus+' dihapus).');nInput();
+  }catch(e){}
+}
+
+/* ---- Nilai per siswa ---- */
+function nSiswa(){
+  var el=$('#nBody'),list=aktifSiswa();
+  if(!list.length){el.innerHTML='<div class="card empty"><span class="em">🧒</span>Belum ada siswa aktif.</div>';return}
+  if(!list.some(function(s){return s.id===UI.nSiswa}))UI.nSiswa=list[0].id;
+  var s=list.filter(function(x){return x.id===UI.nSiswa})[0];
+  var h='<div class="card"><div class="row"><div class="fld" style="min-width:240px"><label for="nSw">Siswa</label><select id="nSw" onchange="nSetSiswa(this.value)">'+list.map(function(x){return '<option value="'+x.id+'"'+(x.id===s.id?' selected':'')+'>'+esc(x.nama)+'</option>'}).join('')+'</select></div><span class="chip">NISN '+esc(s.nisn)+'</span>'+(s.nis?'<span class="chip">NIS '+esc(s.nis)+'</span>':'')+'</div></div>';
+  if(!S.mapel.length){el.innerHTML=h+nEmptyMapel();return}
+  var tot=[],tun=0,rows='';
+  mapelList().forEach(function(m,i){
+    var pens=penList(m.id,UI.nSem),r=hitungAkhir(s.id,pens);
+    if(r.akhir!=null){tot.push(r.akhir);if(r.akhir>=m.kkm)tun++}
+    rows+='<tr><td>'+(i+1)+'</td><td class="l"><b>'+esc(m.nama)+'</b></td><td class="l">'+(pens.length?pens.map(function(p){var v=nilaiOf(s.id,p.id);return '<span class="chip" style="margin:2px">'+esc(p.nama)+' ('+bobotTxt(p.bobot)+'%): <b>'+nTxt(v)+'</b></span>'}).join(''):'<span class="hint">Belum ada penilaian</span>')+'</td><td>'+nTxt(m.kkm)+'</td><td>'+nPill(r.akhir,m.kkm,r.lengkap)+'</td><td>'+nKet(r.akhir,m.kkm)+'</td></tr>';
+  });
+  var avg=tot.length?tot.reduce(function(a,b){return a+b},0)/tot.length:null;
+  h+='<div class="tw" style="margin-top:12px"><table class="tbl"><thead><tr><th>No</th><th class="l">Mata pelajaran</th><th class="l">Rincian penilaian</th><th>KKM</th><th>Nilai akhir</th><th>Ket.</th></tr></thead><tbody>'+rows+'</tbody><tfoot><tr><td colspan="4" class="l">Rata-rata nilai akhir ('+tot.length+' mata pelajaran) · Tuntas: '+tun+'</td><td>'+(avg==null?'–':num(avg,1))+'</td><td></td></tr></tfoot></table></div>';
+  el.innerHTML=h;
+}
+
+/* ---- Kelola mata pelajaran ---- */
+function nKelola(){
+  var el=$('#nBody');
+  var h='<div class="row" style="margin-bottom:12px"><button class="btn ok" onclick="formMapel()">➕ Tambah mata pelajaran</button></div>';
+  if(!S.mapel.length){el.innerHTML=nEmptyMapel();return}
+  h+='<div class="tw"><table class="tbl"><thead><tr><th>No</th><th class="l">Mata pelajaran</th><th>KKM</th><th>Jumlah penilaian (Sem. '+UI.nSem+')</th><th>Total bobot</th><th>Aksi</th></tr></thead><tbody>';
+  mapelList().forEach(function(m,i){
+    var pens=penList(m.id,UI.nSem);
+    h+='<tr><td>'+(i+1)+'</td><td class="l"><b>'+esc(m.nama)+'</b><br><small class="hint">'+(pens.length?pens.map(function(p){return esc(p.nama)+' '+bobotTxt(p.bobot)+'%'}).join(' · '):'Belum ada penilaian')+'</small></td><td>'+nTxt(m.kkm)+'</td><td>'+pens.length+'</td><td>'+(pens.length?bobotBadge(totalBobot(pens)):'–')+'</td>'+
+      '<td style="white-space:nowrap"><button class="btn sm warn" onclick="penModal(\''+m.id+'\')">⚖️ Penilaian</button> <button class="btn sm" onclick="formMapel(\''+m.id+'\')">✏️ Edit</button> <button class="btn sm bad" onclick="hapusMapel(\''+m.id+'\')">🗑️</button></td></tr>';
+  });
+  h+='</tbody></table></div>';
+  el.innerHTML=h;
+}
+function formMapel(id){
+  var m=id?S.mapel.filter(function(x){return x.id===id})[0]:{nama:'',kkm:75};
+  openModal(id?'Edit mata pelajaran':'Tambah mata pelajaran','<div class="form2"><div class="fld full"><label for="mNama">Nama mata pelajaran *</label><input id="mNama" type="text" maxlength="60" value="'+esc(m.nama)+'" placeholder="mis. Matematika"></div><div class="fld"><label for="mKkm">KKM / ketuntasan minimal</label><input id="mKkm" type="number" min="0" max="100" step="0.1" value="'+esc(m.kkm)+'"></div></div><div id="mErr" class="note hide" style="margin-top:10px;background:var(--pink)"></div>',[
+    {text:'Batal',cls:'ghost',fn:closeModal},
+    {text:'Simpan',cls:'pri',fn:async function(){
+      var nama=val('mNama').trim(),kkm=val('mKkm').trim(),er=$('#mErr'),msg='';
+      if(!nama)msg='Nama mata pelajaran wajib diisi.';
+      else if(kkm===''||isNaN(Number(kkm))||Number(kkm)<0||Number(kkm)>100)msg='KKM harus angka 0–100.';
+      else if(S.mapel.some(function(x){return x.nama.toLowerCase()===nama.toLowerCase()&&x.id!==id}))msg='Mata pelajaran sudah ada.';
+      if(msg){er.textContent=msg;er.classList.remove('hide');return}
+      try{
+        var r=await act('api_saveMapel',[{id:id||'',nama:nama,kkm:kkm}]);
+        var o={id:r.id,nama:r.nama,kkm:Number(r.kkm),urutan:Number(r.urutan)};
+        var i=S.mapel.findIndex(function(x){return x.id===o.id});
+        if(i>=0)S.mapel[i]=o;else{S.mapel.push(o);UI.nMapel=o.id}
+        closeModal();toast('Mata pelajaran disimpan.');
+        if(!id)penModal(o.id);else renderNilai();
+      }catch(e){}
+    }}]);
+}
+async function hapusMapel(id){
+  var m=S.mapel.filter(function(x){return x.id===id})[0];if(!m)return;
+  var pids=S.pen.filter(function(p){return p.mapelId===id}).map(function(p){return p.id});
+  var jml=Object.keys(S.nilai).filter(function(k){return pids.indexOf(k.split('|')[1])>=0}).length;
+  if(!(await confirmBox('Hapus mata pelajaran <b>'+esc(m.nama)+'</b>? Seluruh penilaian ('+pids.length+') dan nilai siswa ('+jml+' data) di dalamnya ikut terhapus dan tidak bisa dikembalikan.','Ya, hapus','bad')))return;
+  try{
+    await act('api_deleteMapel',[id]);
+    S.mapel=S.mapel.filter(function(x){return x.id!==id});S.pen=S.pen.filter(function(p){return p.mapelId!==id});
+    Object.keys(S.nilai).forEach(function(k){if(pids.indexOf(k.split('|')[1])>=0)delete S.nilai[k]});
+    toast('Mata pelajaran dihapus.');renderNilai();
+  }catch(e){}
+}
+
+/* ---- Atur penilaian & bobot ---- */
+function penModal(mid){
+  if(UI.dirty&&UI.page==='nilai'){toast('Simpan nilai yang sedang diisi sebelum mengubah penilaian.','inf');return}
+  var m=S.mapel.filter(function(x){return x.id===mid})[0];if(!m)return;
+  UI.penMid=mid;
+  UI.penEdit=penList(mid,UI.nSem).map(function(p){return {id:p.id,nama:p.nama,bobot:String(p.bobot)}});
+  if(!UI.penEdit.length)UI.penEdit=[{id:'',nama:'',bobot:''}];
+  openModal('⚖️ Penilaian '+esc(m.nama)+' – Semester '+UI.nSem,
+    '<p class="hint" style="margin-top:0">Tambahkan jenis penilaian (mis. Tugas, Ulangan Harian, UTS, UAS) dan beri bobot dalam persen. Idealnya total bobot 100%.</p><div id="penRows"></div>'+
+    '<div class="row" style="margin-top:8px"><button class="btn sm ok" onclick="penAdd()">➕ Tambah penilaian</button><button class="btn sm" onclick="penEven()">Bagi rata bobot</button><button class="btn sm ghost" onclick="penTpl()">Templat umum</button></div><div id="penTot" style="margin-top:10px"></div>',[
+    {text:'Batal',cls:'ghost',fn:closeModal},
+    {text:'Simpan penilaian',cls:'pri',fn:penSimpan}]);
+  penDraw();
+}
+function penDraw(){
+  var h='';
+  UI.penEdit.forEach(function(p,i){
+    h+='<div style="display:grid;grid-template-columns:1fr 100px 40px;gap:8px;margin-bottom:6px;align-items:center"><input type="text" maxlength="40" placeholder="Nama penilaian" value="'+esc(p.nama)+'" oninput="penSet('+i+',\'nama\',this.value)" aria-label="Nama penilaian '+(i+1)+'">'+
+      '<input type="number" min="0" max="100" step="0.01" placeholder="Bobot %" value="'+esc(p.bobot)+'" oninput="penSet('+i+',\'bobot\',this.value)" aria-label="Bobot persen '+(i+1)+'"><button class="btn sm bad" onclick="penDel('+i+')" aria-label="Hapus penilaian '+(i+1)+'">🗑️</button></div>';
+  });
+  $('#penRows').innerHTML=h;penTot();
+}
+function penTot(){
+  var t=UI.penEdit.reduce(function(a,p){return a+(Number(String(p.bobot).replace(',','.'))||0)},0);
+  $('#penTot').innerHTML=bobotBadge(t);
+}
+function penSet(i,k,v){UI.penEdit[i][k]=v;if(k==='bobot')penTot()}
+function penAdd(){if(UI.penEdit.length>=30){toast('Maksimal 30 penilaian.','err');return}UI.penEdit.push({id:'',nama:'',bobot:''});penDraw()}
+function penDel(i){UI.penEdit.splice(i,1);penDraw()}
+function penEven(){
+  var n=UI.penEdit.length;if(!n)return;
+  var each=Math.floor(10000/n)/100,rest=Math.round((100-each*n)*100)/100;
+  UI.penEdit.forEach(function(p,i){p.bobot=String(i===n-1?Math.round((each+rest)*100)/100:each)});penDraw();
+}
+function penTpl(){
+  var old={};UI.penEdit.forEach(function(p){old[p.nama.toLowerCase()]=p.id});
+  UI.penEdit=[['Tugas',20],['Ulangan Harian',20],['UTS',25],['UAS',35]].map(function(t){return {id:old[t[0].toLowerCase()]||'',nama:t[0],bobot:String(t[1])}});penDraw();
+}
+async function penSimpan(){
+  var list=[],tb=0;
+  for(var i=0;i<UI.penEdit.length;i++){
+    var p=UI.penEdit[i],nm=p.nama.trim(),b=Number(String(p.bobot).replace(',','.'));
+    if(!nm){toast('Nama penilaian baris '+(i+1)+' wajib diisi.','err');return}
+    if(String(p.bobot).trim()===''||isNaN(b)||b<0||b>100){toast('Bobot "'+nm+'" harus angka 0–100.','err');return}
+    tb+=b;list.push({id:p.id,nama:nm,bobot:b});
+  }
+  if(list.length&&Math.abs(tb-100)>=0.005&&!(await confirmBox('Total bobot saat ini <b>'+bobotTxt(tb)+'%</b>, bukan 100%. Nilai akhir tetap dihitung proporsional terhadap total bobot. Tetap simpan?','Simpan')))return;
+  var mid=UI.penMid;
+  try{
+    var r=await act('api_savePenilaianSet',[mid,UI.nSem,list],{txt:'Menyimpan penilaian…'});
+    S.pen=S.pen.filter(function(x){return !(x.mapelId===mid&&x.semester===UI.nSem)}).concat(r.pen.map(penFix));
+    r.dihapus.forEach(function(id){Object.keys(S.nilai).forEach(function(k){if(k.split('|')[1]===id)delete S.nilai[k]})});
+    UI.nDraft={};UI.dirty=false;closeModal();toast('Penilaian dan bobot disimpan.');renderNilai();
+  }catch(e){}
+}
+function penFix(p){return {id:p.id,mapelId:p.mapelId,semester:p.semester,nama:p.nama,bobot:Number(p.bobot),urutan:Number(p.urutan)}}
 
 /* =====================================================================
    PENGATURAN
